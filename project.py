@@ -1,8 +1,15 @@
 import arcade
 import chess
+import os
 
 screen = 640
 square = screen // 8
+
+# Названия файлов картинок
+sprite_map = {
+    'P': 'w_pawn.png', 'R': 'w_rook.png', 'N': 'w_knight.png', 'B': 'w_bishop.png', 'Q': 'w_queen.png', 'K': 'w_king.png',
+    'p': 'b_pawn.png', 'r': 'b_rook.png', 'n': 'b_knight.png', 'b': 'b_bishop.png', 'q': 'b_queen.png', "k": 'b_king.png'
+}
 
 pieces = {
     'P': '♙', 'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔',
@@ -24,11 +31,29 @@ class ChessGame(arcade.Window):
         self.status_text = arcade.Text("", screen // 2 - 95, screen - 35, arcade.color.YELLOW, 18)
         self.result_text = arcade.Text('', screen // 2 - 145, screen // 2, arcade.color.RED, 32)
         
+        #Загрузка картинок
+        self.textures = {}
+        for symbol, filename in sprite_map.items():
+            try:
+                self.textures[symbol] = arcade.load_texture(filename)
+            except FileNotFoundError:
+                print(f"Файл {filename} не найден, будет использован символ.")
+
+        #Загрузка звуков
+        self.sounds = {}
+        try:
+            self.sounds['move'] = arcade.load_sound("move.wav")
+            self.sounds['capture'] = arcade.load_sound("capture.wav")
+            self.sounds['notify'] = arcade.load_sound("notify.wav")
+        except FileNotFoundError:
+            print("Звуковые файлы не найдены.")
+    
     def on_draw(self):
         self.clear()
         
         square_size = min(self.width, self.height) // 8
         
+        #Отрисовка клеток
         for row in range(8):
             for col in range(8):
                 if (row + col) % 2 == 0:
@@ -43,6 +68,7 @@ class ChessGame(arcade.Window):
                     (x, y), (x + square_size, y), (x + square_size, y + square_size), (x, y + square_size)]
                 arcade.draw_polygon_filled(points, color)
                 
+                #Подсветка выбранной
                 if self.selected:
                     selected_col = chess.square_file(self.selected)
                     selected_row = chess.square_rank(self.selected)
@@ -57,7 +83,8 @@ class ChessGame(arcade.Window):
                                     center_x = col * square_size + square_size // 2
                                     center_y = row * square_size + square_size // 2
                                     arcade.draw_circle_filled(center_x, center_y, square_size // 4 + 2, (0, 255, 0, 150))
-        
+    
+        #Подсветка шаха
         if not self.board.is_checkmate() and self.board.is_check():
             king = self.board.king(self.board.turn)
             if king:
@@ -65,28 +92,35 @@ class ChessGame(arcade.Window):
                 row = chess.square_rank(king)
                 x = col * square_size
                 y = row * square_size
-                points = [
-                    (x, y),
-                    (x + square_size, y),
-                    (x + square_size, y + square_size),
-                    (x, y + square_size)
-                ]
+                points = [(x, y), (x + square_size, y), (x + square_size, y + square_size), (x, y + square_size)]
                 arcade.draw_polygon_filled(points, (255, 0, 0, 105))
-        
+    
+        #Отрисовка фигур
         for square_cell in chess.SQUARES:
             piece = self.board.piece_at(square_cell)
             if piece:
                 col = chess.square_file(square_cell)
                 row = chess.square_rank(square_cell)
-                x = col * square_size + square_size // 2
-                y = row * square_size + square_size // 2 + 2
                 
-                text = pieces[piece.symbol()]
-                color = arcade.color.BLACK if piece.color == chess.BLACK else arcade.color.WHITE
+                #Координаты центра клетки
+                center_x = col * square_size + square_size // 2
+                center_y = row * square_size + square_size // 2
                 
-                arcade.Text(text, x, y, color, square_size // 2 - 2, 
-                          anchor_x="center", anchor_y="center").draw()
-        
+                symbol = piece.symbol()
+                
+                #Исправленная часть
+                if symbol in self.textures:
+                    # Создаем прямоугольник через центр (XYWH)
+                    # X и Y - это центр, W и H - ширина и высота
+                    rect = arcade.XYWH(center_x, center_y, square_size, square_size)
+                    arcade.draw_texture_rect(self.textures[symbol], rect)
+                else:
+                    # Если картинки нет, рисуем текст
+                    text = pieces[symbol]
+                    color = arcade.color.BLACK if piece.color == chess.BLACK else arcade.color.WHITE
+                    arcade.Text(text, center_x, center_y + 2, color, square_size // 2 - 2, 
+                              anchor_x="center", anchor_y="center").draw()
+    
         turn = 'Белые' if self.board.turn else 'Черные'
         self.turn_text.text = f'Ход: {turn}'
         self.turn_text.draw()
@@ -96,7 +130,7 @@ class ChessGame(arcade.Window):
                 self.status_text.text = "шах"
                 self.status_text.color = arcade.color.RED
                 self.status_text.draw()
-        
+    
         if self.game_over:
             self.result_text.text = self.result
             self.result_text.draw()
@@ -131,20 +165,33 @@ class ChessGame(arcade.Window):
                         break
                 
                 if move is None:
-                    move = chess.Move(self.selected, square_cell)
-                    
+                    temp_move = chess.Move(self.selected, square_cell)
                     piece = self.board.piece_at(self.selected)
                     if piece and piece.piece_type == chess.PAWN:
                         if (self.board.turn and row == 7) or (not self.board.turn and row == 0):
                             move = chess.Move(self.selected, square_cell, promotion=chess.QUEEN)
-                
+                    
+                    if move is None:
+                        move = chess.Move(self.selected, square_cell)
+            
                 if move in self.board.legal_moves:
+                    # Звуки
+                    is_capture = self.board.is_capture(move)
                     self.board.push(move)
+                    
+                    if self.sounds:
+                        if self.board.is_checkmate() or self.board.is_check():
+                            if 'notify' in self.sounds: arcade.play_sound(self.sounds['notify'])
+                        elif is_capture:
+                            if 'capture' in self.sounds: arcade.play_sound(self.sounds['capture'])
+                        else:
+                            if 'move' in self.sounds: arcade.play_sound(self.sounds['move'])
+                    
                     self.check_game()
                 
                 self.selected = None
                 self.moves = []
-                
+            
     def check_game(self):
         if self.board.is_checkmate():
             self.game_over = True
@@ -162,7 +209,7 @@ class ChessGame(arcade.Window):
         elif self.board.is_repetition(count=3):
             self.game_over = True
             self.result = 'Троекратное повторение позиции - ничья'
-                
+            
     def on_key_press(self, key, modifiers):
         if key == arcade.key.R:
             self.setup()
